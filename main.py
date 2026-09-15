@@ -15,7 +15,7 @@ async def lifespan(app: FastAPI):
     global session
     print("Loading BiRefNet model...")
     start = time.time()
-    session = new_session("birefnet-general")
+    session = new_session("isnet-general-use")
     print(f"Model loaded in {time.time() - start:.1f}s")
     yield
 
@@ -63,4 +63,4 @@ async def remove_background(file: UploadFile = File(...)):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "model": "birefnet-general", "ready": session is not None}
+    return {"status": "ok", "model": "isnet-general-use", "ready": session is not None}

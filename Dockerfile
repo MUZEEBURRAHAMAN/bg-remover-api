@@ -10,7 +10,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Pre-download the BiRefNet model during build so startup is fast
-RUN python -c "from rembg import new_session; new_session('birefnet-general')"
+RUN python -c "from rembg import new_session; new_session('isnet-general-use')"
 
 COPY main.py .
 
