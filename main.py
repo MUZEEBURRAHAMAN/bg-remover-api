@@ -3,22 +3,32 @@ import io
 import time
 from contextlib import asynccontextmanager
 
+import numpy as np
+import onnxruntime as ort
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from PIL import Image
-from rembg import remove, new_session
 
-session = None
+MODEL_PATH = "/app/isnet-general-use.onnx"
+INPUT_SIZE = 1024
 MAX_DIMENSION = 1280
+
+session: ort.InferenceSession | None = None
+input_name: str | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global session
-    print("Loading isnet-general-use model...")
+    global session, input_name
+    print("Loading isnet-general-use ONNX model...")
     start = time.time()
-    session = new_session("isnet-general-use")
+    so = ort.SessionOptions()
+    so.intra_op_num_threads = 1
+    so.inter_op_num_threads = 1
+    so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    session = ort.InferenceSession(MODEL_PATH, sess_options=so, providers=["CPUExecutionProvider"])
+    input_name = session.get_inputs()[0].name
     print(f"Model loaded in {time.time() - start:.1f}s")
     yield
 
@@ -37,24 +47,20 @@ app.add_middleware(
 )
 
 
-def downscale_if_needed(input_bytes: bytes) -> bytes:
-    img = Image.open(io.BytesIO(input_bytes))
-    img.load()
-    width, height = img.size
+def preprocess(img: Image.Image) -> np.ndarray:
+    resized = img.resize((INPUT_SIZE, INPUT_SIZE), Image.BILINEAR)
+    arr = np.asarray(resized, dtype=np.float32) / 255.0
+    arr = (arr - 0.5) / 1.0
+    arr = arr.transpose(2, 0, 1)[None, ...].astype(np.float32)
+    return arr
 
-    if max(width, height) <= MAX_DIMENSION:
-        img.close()
-        return input_bytes
 
-    scale = MAX_DIMENSION / max(width, height)
-    new_size = (max(1, round(width * scale)), max(1, round(height * scale)))
-    resized = img.resize(new_size, Image.LANCZOS)
-    img.close()
-
-    buf = io.BytesIO()
-    resized.save(buf, format="PNG")
-    resized.close()
-    return buf.getvalue()
+def mask_from_output(output: np.ndarray, size: tuple[int, int]) -> Image.Image:
+    mask = output[0, 0]
+    mask_min, mask_max = float(mask.min()), float(mask.max())
+    mask = (mask - mask_min) / (mask_max - mask_min + 1e-8)
+    mask_img = Image.fromarray((mask * 255).astype(np.uint8), mode="L")
+    return mask_img.resize(size, Image.BILINEAR)
 
 
 @app.post("/remove")
@@ -67,21 +73,34 @@ async def remove_background(file: UploadFile = File(...)):
         raise HTTPException(413, "Image too large (max 20MB)")
 
     try:
-        processed_bytes = downscale_if_needed(input_bytes)
+        img = Image.open(io.BytesIO(input_bytes)).convert("RGB")
+        img.load()
     except Exception as e:
         raise HTTPException(400, f"Could not decode image: {e}")
+    finally:
+        del input_bytes
 
-    del input_bytes
+    if max(img.size) > MAX_DIMENSION:
+        scale = MAX_DIMENSION / max(img.size)
+        new_size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
+        img = img.resize(new_size, Image.LANCZOS)
+
+    work_size = img.size
 
     start = time.time()
     try:
-        output_bytes = remove(
-            processed_bytes,
-            session=session,
-            post_process_mask=False,
-        )
+        tensor = preprocess(img)
+        outputs = session.run(None, {input_name: tensor})
+        mask = mask_from_output(outputs[0], work_size)
+
+        rgba = img.convert("RGBA")
+        rgba.putalpha(mask)
+
+        buf = io.BytesIO()
+        rgba.save(buf, format="PNG")
+        output_bytes = buf.getvalue()
     finally:
-        del processed_bytes
+        del img
         gc.collect()
     elapsed = time.time() - start
 

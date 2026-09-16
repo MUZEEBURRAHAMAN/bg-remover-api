@@ -2,15 +2,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && \
-    rm -rf /var/lib/apt/lists/*
-
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-download the BiRefNet model during build so startup is fast
-RUN python -c "from rembg import new_session; new_session('isnet-general-use')"
+# Download the isnet-general-use ONNX model directly (no rembg dependency)
+RUN python -c "import urllib.request; urllib.request.urlretrieve('https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx', '/app/isnet-general-use.onnx')"
 
 COPY main.py .
 
