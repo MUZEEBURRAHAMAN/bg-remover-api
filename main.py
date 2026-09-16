@@ -11,9 +11,11 @@ from fastapi.responses import Response
 from PIL import Image
 from starlette.concurrency import run_in_threadpool
 
-MODEL_PATH = "/app/isnet-general-use.onnx"
-INPUT_SIZE = 1024
+MODEL_PATH = "/app/u2netp.onnx"
+INPUT_SIZE = 320
 MAX_DIMENSION = 1280
+MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 session: ort.InferenceSession | None = None
 input_name: str | None = None
@@ -22,7 +24,7 @@ input_name: str | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global session, input_name
-    print("Loading isnet-general-use ONNX model...")
+    print("Loading u2netp ONNX model...")
     start = time.time()
     so = ort.SessionOptions()
     so.intra_op_num_threads = 1
@@ -51,7 +53,7 @@ app.add_middleware(
 def preprocess(img: Image.Image) -> np.ndarray:
     resized = img.resize((INPUT_SIZE, INPUT_SIZE), Image.BILINEAR)
     arr = np.asarray(resized, dtype=np.float32) / 255.0
-    arr = (arr - 0.5) / 1.0
+    arr = (arr - MEAN) / STD
     arr = arr.transpose(2, 0, 1)[None, ...].astype(np.float32)
     return arr
 
@@ -123,4 +125,4 @@ async def remove_background(file: UploadFile = File(...)):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "model": "isnet-general-use", "ready": session is not None}
+    return {"status": "ok", "model": "u2netp", "ready": session is not None}
