@@ -9,6 +9,7 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from PIL import Image
+from starlette.concurrency import run_in_threadpool
 
 MODEL_PATH = "/app/isnet-general-use.onnx"
 INPUT_SIZE = 1024
@@ -63,15 +64,7 @@ def mask_from_output(output: np.ndarray, size: tuple[int, int]) -> Image.Image:
     return mask_img.resize(size, Image.BILINEAR)
 
 
-@app.post("/remove")
-async def remove_background(file: UploadFile = File(...)):
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(400, "File must be an image")
-
-    input_bytes = await file.read()
-    if len(input_bytes) > 20 * 1024 * 1024:
-        raise HTTPException(413, "Image too large (max 20MB)")
-
+def process_image_sync(input_bytes: bytes) -> tuple[bytes, float]:
     try:
         img = Image.open(io.BytesIO(input_bytes)).convert("RGB")
         img.load()
@@ -103,6 +96,20 @@ async def remove_background(file: UploadFile = File(...)):
         del img
         gc.collect()
     elapsed = time.time() - start
+
+    return output_bytes, elapsed
+
+
+@app.post("/remove")
+async def remove_background(file: UploadFile = File(...)):
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(400, "File must be an image")
+
+    input_bytes = await file.read()
+    if len(input_bytes) > 20 * 1024 * 1024:
+        raise HTTPException(413, "Image too large (max 20MB)")
+
+    output_bytes, elapsed = await run_in_threadpool(process_image_sync, input_bytes)
 
     return Response(
         content=output_bytes,
